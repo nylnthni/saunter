@@ -14,6 +14,172 @@ const PLACEHOLDER_PROMPTS = [
 
 const PROMPT_FADE_MS = 1000;
 
+type FinalizeRouteResult = {
+  success: boolean;
+  vibe: string;
+  total_duration_minutes: number;
+  stops: Array<{
+    name: string;
+    note: string;
+    resolved: { name: string; address: string; lat: number; lng: number } | null;
+  }>;
+};
+
+type LatLng = { lat: number; lng: number };
+
+function buildGoogleMapsUrl(points: LatLng[]): string | null {
+  if (points.length === 0) return null;
+  const origin = points[0];
+  const destination = points[points.length - 1];
+  const waypoints = points.slice(1, -1).map((p) => `${p.lat},${p.lng}`).join('|');
+
+  const base = `https://www.google.com/maps/dir/?api=1&travelmode=walking&origin=${origin.lat},${origin.lng}&destination=${destination.lat},${destination.lng}`;
+  if (!waypoints) return base;
+  return `${base}&waypoints=${encodeURIComponent(waypoints)}`;
+}
+
+/** Apple Maps does not support multi-stop walking; open first stop only. */
+function buildAppleMapsFirstStopUrl(first: LatLng | undefined): string | null {
+  if (!first) return null;
+  return `https://maps.apple.com/?dirflg=w&daddr=${first.lat},${first.lng}`;
+}
+
+function buildAddressListForCopy(
+  stops: Array<{ name: string; resolved: { address: string } }>,
+): string {
+  return stops
+    .map((s, i) => `${i + 1}. ${s.name} — ${s.resolved.address}`)
+    .join('\n');
+}
+
+function FinalizeRouteCard({ finalize }: { finalize: FinalizeRouteResult }) {
+  const [copied, setCopied] = useState(false);
+
+  const resolvedStops = finalize.stops
+    .filter((s) => s.resolved)
+    .map((s) => ({
+      name: s.name,
+      note: s.note,
+      resolved: s.resolved!,
+    }));
+
+  const failedCount = finalize.stops.length - resolvedStops.length;
+  const points: LatLng[] = resolvedStops.map((s) => ({
+    lat: s.resolved.lat,
+    lng: s.resolved.lng,
+  }));
+
+  const googleUrl = buildGoogleMapsUrl(points);
+  const appleFirstUrl = buildAppleMapsFirstStopUrl(points[0]);
+
+  async function handleCopyAddresses() {
+    if (resolvedStops.length === 0) return;
+    const text = buildAddressListForCopy(resolvedStops);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // ignore clipboard failures
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-3xl border border-white/40 bg-white/40 p-4 shadow-lg shadow-black/5 backdrop-blur-2xl">
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            vibe
+          </div>
+          <div className="mt-1 font-serif text-sm text-slate-900">{finalize.vibe}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+            total duration
+          </div>
+          <div className="mt-1 font-serif text-sm text-slate-900">
+            {finalize.total_duration_minutes} min
+          </div>
+        </div>
+      </div>
+
+      {failedCount > 0 && (
+        <div className="mb-4 rounded-2xl border border-white/40 bg-slate-900/10 px-3 py-2 text-xs text-slate-700">
+          warning: some stops couldn&apos;t be resolved.
+        </div>
+      )}
+
+      <div className="mb-6 space-y-3">
+        {resolvedStops.map((stop, idx) => (
+          <div
+            key={`${stop.name}-${idx}`}
+            className="rounded-2xl border border-white/40 bg-white/20 p-3"
+          >
+            <div className="font-serif text-sm text-slate-900">{stop.name}</div>
+            <div className="mt-0.5 text-xs text-slate-600">{stop.resolved.address}</div>
+            {stop.note && (
+              <div className="mt-2 text-sm leading-relaxed text-slate-800">{stop.note}</div>
+            )}
+          </div>
+        ))}
+
+        {resolvedStops.length === 0 && (
+          <div className="text-sm text-slate-600">no resolved stops yet.</div>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+        <a
+          className={`flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-900/70 px-3 py-3 text-center text-xs font-semibold text-white transition hover:bg-slate-900/85 normal-case ${
+            googleUrl ? '' : 'cursor-not-allowed opacity-60'
+          }`}
+          href={googleUrl ?? '#'}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => {
+            if (!googleUrl) e.preventDefault();
+          }}
+        >
+          Google Maps <span aria-hidden>↗</span>
+        </a>
+        <a
+          className={`flex min-h-[44px] flex-1 items-center justify-center gap-1 rounded-xl bg-slate-900/70 px-3 py-3 text-center text-xs font-semibold text-white transition hover:bg-slate-900/85 normal-case ${
+            appleFirstUrl ? '' : 'cursor-not-allowed opacity-60'
+          }`}
+          href={appleFirstUrl ?? '#'}
+          target="_blank"
+          rel="noreferrer"
+          onClick={(e) => {
+            if (!appleFirstUrl) e.preventDefault();
+          }}
+        >
+          Apple Maps (first stop) <span aria-hidden>↗</span>
+        </a>
+      </div>
+
+      <div className="mt-3 text-center">
+        <button
+          type="button"
+          onClick={handleCopyAddresses}
+          disabled={resolvedStops.length === 0}
+          className={`border-b border-transparent pb-0.5 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+            copied
+              ? 'cursor-default text-emerald-700'
+              : 'text-slate-600 hover:border-slate-400/80 hover:text-slate-900'
+          }`}
+        >
+          {copied ? '✓ copied' : 'Copy all addresses'}
+        </button>
+      </div>
+
+      <p className="mx-auto mt-2 max-w-md text-center text-xs italic leading-snug text-slate-500 normal-case">
+        apple maps doesn&apos;t support multi-stop walking — open the first stop, or copy the
+        list to add stops manually.
+      </p>
+    </div>
+  );
+}
+
 function textFromMessage(message: UIMessage): string {
   return message.parts
     .filter((part): part is { type: 'text'; text: string } => part.type === 'text')
@@ -122,6 +288,21 @@ export default function Page() {
                       >
                         <ReactMarkdown>{body}</ReactMarkdown>
                       </div>
+                      {(() => {
+                        const finalizePart = [...message.parts]
+                          .reverse()
+                          .find(
+                            (part: any) =>
+                              part?.type === 'tool-finalize_route' &&
+                              part?.state === 'output-available' &&
+                              part?.output,
+                          ) as { output: FinalizeRouteResult } | undefined;
+
+                        const finalize = finalizePart?.output;
+                        if (!finalize) return null;
+
+                        return <FinalizeRouteCard finalize={finalize} />;
+                      })()}
                     </div>
                   </div>
                 );
